@@ -1,0 +1,247 @@
+// ==UserScript==
+// @name         Watch Movies and TV shows directly on IMDB
+// @namespace    http://tampermonkey.net/
+// @version      2.6
+// @description  Adds a "Watch Now" button to stream movies or TV shows on any IMDB title pages for free.
+// @author       flowscript
+// @match        https://www.imdb.com/title/*
+// @match        https://m.imdb.com/title/*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=imdb.com
+// @grant        none
+// @license MIT
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    const TMDB_API_KEY = '9b232930b800997d6ded4dc363d1f410'; // Replace with your TMDB API key
+    const ONE_YEAR_IN_MS = 365 * 24 * 60 * 60 * 1000; // One year in milliseconds
+
+    function createIframeContainer(url) {
+        const container = document.createElement('div');
+        container.style.position = 'relative';
+        container.style.width = '100%';
+        container.style.height = '600px';
+        container.style.marginBottom = '10px';
+
+        const loadingElement = createLoadingElement();
+        loadingElement.style.position = 'absolute';
+        loadingElement.style.top = '50%';
+        loadingElement.style.left = '50%';
+        loadingElement.style.transform = 'translate(-50%, -50%)';
+        loadingElement.style.zIndex = '1';
+
+        const iframe = document.createElement('iframe');
+        iframe.src = url;
+        iframe.width = '100%';
+        iframe.height = '600';
+        iframe.frameBorder = '0';
+        iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture';
+        iframe.allowFullscreen = true;
+        iframe.style.position = 'absolute';
+        iframe.style.top = '0';
+        iframe.style.left = '0';
+        iframe.style.width = '100%';
+        iframe.style.height = '100%';
+        iframe.style.zIndex = '2';
+
+        // Hide loading when iframe is loaded
+        iframe.onload = () => {
+            console.log('Iframe loaded successfully');
+            loadingElement.style.display = 'none';
+        };
+
+        container.appendChild(loadingElement);
+        container.appendChild(iframe);
+        return container;
+    }
+
+    function createLoadingElement() {
+        const loadingElement = document.createElement('div');
+        loadingElement.id = 'loading-icon';
+        loadingElement.className = 'lds-dual-ring';
+        loadingElement.style.color = '#f5c518';
+        return loadingElement;
+    }
+
+    function addLoadingStyles() {
+        const style = document.createElement('style');
+        style.textContent = `
+            .lds-dual-ring,
+            .lds-dual-ring:after {
+                box-sizing: border-box;
+            }
+            .lds-dual-ring {
+                display: inline-block;
+                width: 80px;
+                height: 80px;
+            }
+            .lds-dual-ring:after {
+                content: " ";
+                display: block;
+                width: 64px;
+                height: 64px;
+                margin: 8px;
+                border-radius: 50%;
+                border: 6.4px solid currentColor;
+                border-color: currentColor transparent currentColor transparent;
+                animation: lds-dual-ring 1.2s linear infinite;
+            }
+            @keyframes lds-dual-ring {
+                0% {
+                    transform: rotate(0deg);
+                }
+                100% {
+                    transform: rotate(360deg);
+                }
+            }
+            .watch-now-button {
+                padding: 10px 20px;
+                background-color: #f5c518;
+                border: 1px solid rgb(245, 197, 24);
+                color: #000;
+                font-size: 16px;
+                cursor: pointer;
+                margin-top: 10px;
+                margin-bottom: 10px;
+                margin-left: 24px;
+                border-radius: 10px;
+            }
+            .watch-now-button:hover {
+                background-color: #121212 !important;
+                color: #fff;
+                border: 1px solid rgb(245, 197, 24);
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    function checkMovieRelease(imdbId) {
+        console.log('Checking movie release for IMDb ID:', imdbId);
+        // Fetch movie details from TMDB
+        return fetch(`https://api.themoviedb.org/3/find/${imdbId}?api_key=${TMDB_API_KEY}&external_source=imdb_id`)
+            .then(response => {
+                console.log('TMDB find response status:', response.status);
+                return response.json();
+            })
+            .then(data => {
+                if (data.movie_results && data.movie_results.length > 0) {
+                    console.log('Movie results found:', data.movie_results);
+                    const movie = data.movie_results[0];
+                    const movieId = movie.id;
+                    const releaseDate = new Date(movie.release_date);
+                    const currentDate = new Date();
+
+                    // Check if the movie was released more than a year ago
+                    if (currentDate - releaseDate > ONE_YEAR_IN_MS) {
+                        return { isAvailable: true, message: 'This movie is available digitally.' };
+                    }
+
+                    // Fetch release dates for the movie
+                    console.log('Fetching release dates for movie ID:', movieId);
+                    return fetch(`https://api.themoviedb.org/3/movie/${movieId}/release_dates?api_key=${TMDB_API_KEY}`)
+                        .then(response => {
+                            console.log('TMDB release dates response status:', response.status);
+                            return response.json();
+                        })
+                        .then(releaseData => {
+                            const releases = releaseData.results.find(r => r.iso_3166_1 === 'US');
+                            if (releases) {
+                                console.log('Release dates found for US region:', releases);
+                                const theaterRelease = releases.release_dates.find(r => r.type === 3); // Theatrical release
+                                const digitalRelease = releases.release_dates.find(r => r.type === 4 || r.type === 5); // Digital or Physical release
+
+                                if (digitalRelease) {
+                                    return { isAvailable: true, message: 'This movie is available digitally.' };
+                                }
+                                if (theaterRelease) {
+                                    return { isAvailable: false, message: 'This movie is currently only available in theaters.' };
+                                }
+                            }
+                            return { isAvailable: false, message: 'Release information is unavailable.' };
+                        });
+                }
+                console.log('No movie results found for IMDb ID:', imdbId);
+                return { isAvailable: false, message: 'Movie details not found.' };
+            });
+    }
+
+    const currentUrl = window.location.href;
+    console.log('Current URL:', currentUrl);
+    const idMatch = currentUrl.match(/title\/(tt\d+)\//);
+    const imdbId = idMatch ? idMatch[1] : null;
+
+    if (!imdbId) {
+        console.warn('IMDb ID not found in URL');
+        return;
+    }
+
+    // Fetch the meta property "og:type" to check if it's a movie or a TV show
+    const ogTypeMeta = document.querySelector('meta[property="og:type"]');
+    const ogType = ogTypeMeta ? ogTypeMeta.getAttribute('content') : null;
+
+    if (!ogType) {
+        console.warn('og:type meta tag not found');
+        return;
+    }
+
+    console.log('og:type content:', ogType);
+
+    let embedUrl = '';
+
+    // Determine if it's a movie, TV show, or other based on the og:type content
+    if (ogType === 'video.movie') {
+        embedUrl = `https://2embed.cc/embed/${imdbId}`;
+    } else if (ogType === 'video.tv_show' || ogType === 'video.other') {
+        // Directly embed the TV show or other video without checking for release dates
+        embedUrl = `https://2embed.cc/embedtvfull/${imdbId}`;
+    }
+
+    if (embedUrl) {
+        console.log('Embed URL:', embedUrl);
+        const result = document.evaluate(
+            '//*[@id="__next"]/main/div/section[1]/section/div[3]/section/section/div[2]',
+            document,
+            null,
+            XPathResult.FIRST_ORDERED_NODE_TYPE,
+            null
+        );
+
+        const topDiv = result.singleNodeValue;
+        if (topDiv) {
+            console.log('Top div found for inserting button');
+            const watchButton = document.createElement('button');
+            watchButton.textContent = 'Watch Now';
+            watchButton.className = 'watch-now-button';
+
+            watchButton.addEventListener('click', function() {
+                console.log('Watch Now button clicked');
+                if (ogType === 'video.movie') {
+                    // Only check release for movies
+                    checkMovieRelease(imdbId).then(releaseInfo => {
+                        console.log('Release info:', releaseInfo);
+                        if (!releaseInfo.isAvailable) {
+                            alert(releaseInfo.message);
+                        } else {
+                            const iframeContainer = createIframeContainer(embedUrl);
+                            topDiv.insertAdjacentElement("afterend", iframeContainer);
+                            watchButton.style.display = 'none'; // Hide the button after clicking
+                        }
+                    });
+                } else {
+                    // For TV shows or other videos, just embed the video without checking release
+                    const iframeContainer = createIframeContainer(embedUrl);
+                    topDiv.insertAdjacentElement("afterend", iframeContainer);
+                    watchButton.style.display = 'none'; // Hide the button after clicking
+                }
+            });
+
+            topDiv.insertAdjacentElement("afterend", watchButton);
+            addLoadingStyles();
+        } else {
+            console.warn('Top div for inserting button not found');
+        }
+    } else {
+        console.warn('Embed URL not generated');
+    }
+})();
